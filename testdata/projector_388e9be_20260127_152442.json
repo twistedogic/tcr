@@ -1,0 +1,46 @@
+{
+  "id": "cf609324-d0f3-4845-90f0-0b6204186728",
+  "version": "1.0",
+  "repo_path": "/Users/a012/Dev/projector/",
+  "base_commit": "388e9be2840309204aef7b82c3f3e4d5985dfa7f",
+  "created_at": "2026-01-27T15:24:42.452823Z",
+  "updated_at": "2026-01-27T15:24:42.452823Z",
+  "files": {
+    "main.go": {
+      "path": "main.go",
+      "reviewed": false,
+      "status": "modified",
+      "file_comments": [
+        {
+          "id": "e7ecdd65-6d55-4647-82fc-d081f5ab15c3",
+          "content": "Make it smaller",
+          "comment_type": "suggestion",
+          "created_at": "2026-01-27T15:24:53.587513Z",
+          "line_context": null,
+          "side": null
+        }
+      ],
+      "line_comments": {
+        "18": [
+          {
+            "id": "fb888f59-bdca-4ebe-9589-ac0929b167a9",
+            "content": "ok",
+            "comment_type": "note",
+            "created_at": "2026-01-27T15:24:58.794667Z",
+            "line_context": null,
+            "side": "old"
+          },
+          {
+            "id": "e7154227-bd9c-4c74-ab73-86c63826f727",
+            "content": "Not ok",
+            "comment_type": "praise",
+            "created_at": "2026-01-27T15:25:05.964144Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ]
+      }
+    }
+  },
+  "session_notes": null
+}

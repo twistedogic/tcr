@@ -1,0 +1,161 @@
+{
+  "id": "b8b375d4-5b59-48ce-9903-2ee69fb6a0b7",
+  "version": "1.0",
+  "repo_path": "/home/a012/projects/projector/",
+  "base_commit": "dd115dd5fcb06efcfc59a950891116e8387a6846",
+  "created_at": "2026-01-27T14:45:28.806736198Z",
+  "updated_at": "2026-01-27T14:45:28.806736198Z",
+  "files": {
+    "pkg/config/config.go": {
+      "path": "pkg/config/config.go",
+      "reviewed": true,
+      "status": "added",
+      "file_comments": [],
+      "line_comments": {}
+    },
+    "main.go": {
+      "path": "main.go",
+      "reviewed": false,
+      "status": "modified",
+      "file_comments": [],
+      "line_comments": {
+        "102": [
+          {
+            "id": "9d13817b-ab78-4095-a8db-52edd7615ee4",
+            "content": "`tags` is a comma-separated list. Please use `strings.Split` to split the string by `,`.",
+            "comment_type": "issue",
+            "created_at": "2026-01-27T14:51:11.121169206Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ],
+        "85": [
+          {
+            "id": "a0068610-e1e0-477b-9c0a-59e9f2607bf0",
+            "content": "Use `slog` instead of `log`.",
+            "comment_type": "suggestion",
+            "created_at": "2026-01-27T14:49:05.073485745Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ]
+      }
+    },
+    "pkg/config/config_test.go": {
+      "path": "pkg/config/config_test.go",
+      "reviewed": true,
+      "status": "added",
+      "file_comments": [],
+      "line_comments": {}
+    },
+    "pkg/registry/registry.go": {
+      "path": "pkg/registry/registry.go",
+      "reviewed": true,
+      "status": "added",
+      "file_comments": [],
+      "line_comments": {
+        "110": [
+          {
+            "id": "c999f899-8b96-41b6-ba6a-d31e8b5b0096",
+            "content": "remove this function",
+            "comment_type": "suggestion",
+            "created_at": "2026-01-27T15:06:33.324196768Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ],
+        "127": [
+          {
+            "id": "d15233b6-8e5c-4775-b413-83f185c9ece2",
+            "content": "remove this struct",
+            "comment_type": "note",
+            "created_at": "2026-01-27T15:06:53.686124012Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ]
+      }
+    },
+    "pkg/registry/registry_test.go": {
+      "path": "pkg/registry/registry_test.go",
+      "reviewed": true,
+      "status": "added",
+      "file_comments": [],
+      "line_comments": {}
+    },
+    "go.mod": {
+      "path": "go.mod",
+      "reviewed": true,
+      "status": "modified",
+      "file_comments": [],
+      "line_comments": {}
+    },
+    "pkg/cluster/gossip_test.go": {
+      "path": "pkg/cluster/gossip_test.go",
+      "reviewed": true,
+      "status": "added",
+      "file_comments": [],
+      "line_comments": {}
+    },
+    "CLUSTER.md": {
+      "path": "CLUSTER.md",
+      "reviewed": true,
+      "status": "added",
+      "file_comments": [],
+      "line_comments": {}
+    },
+    "openspec/changes/add-peer-discovery/tasks.md": {
+      "path": "openspec/changes/add-peer-discovery/tasks.md",
+      "reviewed": true,
+      "status": "modified",
+      "file_comments": [],
+      "line_comments": {}
+    },
+    "pkg/cluster/gossip.go": {
+      "path": "pkg/cluster/gossip.go",
+      "reviewed": true,
+      "status": "added",
+      "file_comments": [],
+      "line_comments": {
+        "38": [
+          {
+            "id": "c921e9ad-f852-4584-a1d8-162f23556431",
+            "content": "Make `metadata` a struct for consistence unmarshaling. The struct should contains field `Tags` of string slice.",
+            "comment_type": "suggestion",
+            "created_at": "2026-01-27T14:56:21.687295166Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ],
+        "24": [
+          {
+            "id": "b43a0681-a8d4-4a95-bdb1-50019094a711",
+            "content": "`done` is not used. please remove.",
+            "comment_type": "issue",
+            "created_at": "2026-01-27T15:00:55.496654680Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ],
+        "25": [
+          {
+            "id": "05fdb689-64c4-4ce2-83b2-7cd3eff0f085",
+            "content": "`wg` is not used. please remove.",
+            "comment_type": "note",
+            "created_at": "2026-01-27T15:01:10.767673566Z",
+            "line_context": null,
+            "side": "new"
+          }
+        ]
+      }
+    },
+    "go.sum": {
+      "path": "go.sum",
+      "reviewed": true,
+      "status": "modified",
+      "file_comments": [],
+      "line_comments": {}
+    }
+  },
+  "session_notes": null
+}
