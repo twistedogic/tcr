@@ -119,7 +119,7 @@ func (*tuicrCmd) Name() string             { return "tuicr" }
 func (*tuicrCmd) Synopsis() string         { return "convert tuicr review json to LLM review comment prompt" }
 func (*tuicrCmd) Usage() string            { return "" }
 func (*tuicrCmd) SetFlags(f *flag.FlagSet) {}
-func (*tuicrCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+func (*tuicrCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...any) subcommands.ExitStatus {
 	file := f.Arg(0)
 	if file == "" {
 		fmt.Println("no file provided.")

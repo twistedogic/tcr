@@ -89,6 +89,7 @@ func (review *FormattedReview) String() string {
 func main() {
 	subcommands.Register(&githubCmd{}, "")
 	subcommands.Register(&tuicrCmd{}, "")
+	subcommands.Register(&Server{}, "")
 
 	flag.Parse()
 	ctx := context.Background()

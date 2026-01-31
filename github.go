@@ -63,23 +63,23 @@ func (c GitHubComment) ToFormattedComment() FormattedComment {
 	}
 }
 
+// parseGitHubURL attempts to parse a GitHub URL as either a PR URL or a repository URL.
+// Returns (*GitHubPRInfo, nil, nil) for PR URLs, or (nil, *GitHubRepoInfo, nil) for repo URLs.
 func parseGitHubURL(url string) (*GitHubPRInfo, error) {
+	// Try PR URL pattern first
 	matches := prUrlPattern.FindStringSubmatch(url)
-
-	if len(matches) != 4 {
-		return nil, fmt.Errorf("invalid GitHub PR URL format. Expected: https://github.com/owner/repo/pull/123")
+	if len(matches) == 4 {
+		number, err := strconv.Atoi(matches[3])
+		if err != nil {
+			return nil, fmt.Errorf("invalid PR number: %s", matches[3])
+		}
+		return &GitHubPRInfo{
+			Owner:  matches[1],
+			Repo:   matches[2],
+			Number: number,
+		}, nil
 	}
-
-	number, err := strconv.Atoi(matches[3])
-	if err != nil {
-		return nil, fmt.Errorf("invalid PR number: %s", matches[3])
-	}
-
-	return &GitHubPRInfo{
-		Owner:  matches[1],
-		Repo:   matches[2],
-		Number: number,
-	}, nil
+	return nil, fmt.Errorf("invalid GitHub URL format. Expected: https://github.com/owner/repo/pull/123 or https://github.com/owner/repo")
 }
 
 func resolveToken(cliToken string) string {
@@ -93,16 +93,18 @@ type GitHubPRClient struct {
 	baseURL string
 	client  *http.Client
 	token   string
-	prInfo  *GitHubPRInfo
+	owner   string
+	repo    string
 }
 
-func NewGitHubPRClient(prInfo *GitHubPRInfo, token string) *GitHubPRClient {
+func NewGitHubPRClient(owner, repo, token string) *GitHubPRClient {
 	client := &http.Client{Timeout: 30 * time.Second}
 	return &GitHubPRClient{
 		baseURL: "https://api.github.com",
 		client:  client,
 		token:   resolveToken(token),
-		prInfo:  prInfo,
+		owner:   owner,
+		repo:    repo,
 	}
 }
 
@@ -124,7 +126,7 @@ func (c *GitHubPRClient) request(ctx context.Context, url string, result any) er
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 404 {
-		return fmt.Errorf("PR not found. Check the URL or ensure you have access to this repository")
+		return fmt.Errorf("%s %s returns 404", req.Method, req.URL)
 	}
 
 	if resp.StatusCode == 403 {
@@ -154,29 +156,55 @@ func (c *GitHubPRClient) request(ctx context.Context, url string, result any) er
 	return nil
 }
 
-func (c *GitHubPRClient) fetchPRMetadata(ctx context.Context) (*GitHubPR, error) {
-	url := c.baseURL + c.prInfo.Path()
+func (c *GitHubPRClient) fetchPRMetadata(ctx context.Context, prNumber int) (*GitHubPR, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, c.owner, c.repo, prNumber)
 	var pr GitHubPR
 	err := c.request(ctx, url, &pr)
 	return &pr, err
 }
 
-func (c *GitHubPRClient) fetchReviewComments(ctx context.Context) ([]GitHubComment, error) {
-	url := c.baseURL + c.prInfo.Path() + "/comments"
+func (c *GitHubPRClient) fetchReviewComments(ctx context.Context, prNumber int) ([]GitHubComment, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/comments", c.baseURL, c.owner, c.repo, prNumber)
 	var comments []GitHubComment
 	err := c.request(ctx, url, &comments)
 	return comments, err
 }
 
-func (c *GitHubPRClient) Review(ctx context.Context) (*FormattedReview, error) {
-	// Fetch PR metadata
-	pr, err := c.fetchPRMetadata(ctx)
+// fetchLatestOpenPR fetches the most recently created open PR for the repository
+func (c *GitHubPRClient) fetchLatestOpenPR(ctx context.Context) (*GitHubPR, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open&sort=created&direction=desc&per_page=1", c.baseURL, c.owner, c.repo)
+	var prs []*GitHubPR
+	err := c.request(ctx, url, &prs)
 	if err != nil {
 		return nil, err
 	}
 
+	if len(prs) == 0 {
+		return nil, fmt.Errorf("no open pull requests found for %s/%s", c.owner, c.repo)
+	}
+	return prs[0], nil
+
+}
+
+func (c *GitHubPRClient) Review(ctx context.Context, prNumber int) (*FormattedReview, error) {
+	// Fetch PR metadata
+	var pr *GitHubPR
+	if prNumber <= 0 {
+		latest, err := c.fetchLatestOpenPR(ctx)
+		if err != nil {
+			return nil, err
+		}
+		pr = latest
+	} else {
+		npr, err := c.fetchPRMetadata(ctx, prNumber)
+		if err != nil {
+			return nil, err
+		}
+		pr = npr
+	}
+
 	// Fetch review comments (inline code comments)
-	comments, err := c.fetchReviewComments(ctx)
+	comments, err := c.fetchReviewComments(ctx, pr.Number)
 	if err != nil {
 		return nil, err
 	}
@@ -193,25 +221,51 @@ func (c *GitHubPRClient) Review(ctx context.Context) (*FormattedReview, error) {
 	}, nil
 }
 
-type githubCmd struct{}
+type githubCmd struct {
+	owner    string
+	repo     string
+	prNumber int
+}
 
-func (*githubCmd) Name() string             { return "github" }
-func (*githubCmd) Synopsis() string         { return "convert github review to LLM review comment prompt" }
-func (*githubCmd) Usage() string            { return "" }
-func (*githubCmd) SetFlags(f *flag.FlagSet) {}
-func (*githubCmd) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+func (*githubCmd) Name() string     { return "github" }
+func (*githubCmd) Synopsis() string { return "convert github review to LLM review comment prompt" }
+func (*githubCmd) Usage() string    { return "" }
+
+func (g *githubCmd) SetFlags(f *flag.FlagSet) {
+	f.StringVar(&g.owner, "owner", "", "repo owner")
+	f.StringVar(&g.owner, "o", "", "repo owner")
+	f.StringVar(&g.repo, "repo", "", "repo name")
+	f.StringVar(&g.repo, "r", "", "repo name")
+	f.IntVar(&g.prNumber, "number", 0, "pr number")
+	f.IntVar(&g.prNumber, "n", 0, "pr number")
+}
+
+func (g *githubCmd) Execute(ctx context.Context, f *flag.FlagSet, _ ...any) subcommands.ExitStatus {
 	url := f.Arg(0)
-	if url == "" {
-		fmt.Println("no url provided.")
+	if url == "" && (g.owner == "" || g.repo == "") {
+		fmt.Println("no url or repo info provided.")
 		return subcommands.ExitUsageError
 	}
-	info, err := parseGitHubURL(url)
+
+	prInfo := &GitHubPRInfo{
+		Owner:  g.owner,
+		Repo:   g.repo,
+		Number: g.prNumber,
+	}
+
+	if url != "" {
+		info, err := parseGitHubURL(url)
+		if err != nil {
+			fmt.Println(err)
+			return subcommands.ExitUsageError
+		}
+		prInfo = info
+	}
+
+	client := NewGitHubPRClient(prInfo.Owner, prInfo.Repo, "")
+	review, err := client.Review(ctx, prInfo.Number)
 	if err != nil {
 		fmt.Println(err)
-		return subcommands.ExitUsageError
-	}
-	review, err := NewGitHubPRClient(info, "").Review(ctx)
-	if err != nil {
 		return subcommands.ExitFailure
 	}
 	fmt.Println(review.String())
