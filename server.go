@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
+	"github.com/charmbracelet/wish/activeterm"
+	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/google/subcommands"
 )
 
@@ -43,9 +47,10 @@ func SlogMiddleware() wish.Middleware {
 }
 
 type Server struct {
-	host     string
-	port     int
-	password string
+	host      string
+	port      int
+	password  string
+	workspace string
 }
 
 func (s *Server) passkey() string {
@@ -56,15 +61,15 @@ func (s *Server) passkey() string {
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	if err := bootstrapWorkspace(s.workspace); err != nil {
+		return err
+	}
 	options := []ssh.Option{
 		wish.WithAddress(s.host + ":" + strconv.Itoa(s.port)),
+		ssh.AllocatePty(),
 		wish.WithMiddleware(
-			func(next ssh.Handler) ssh.Handler {
-				return func(sess ssh.Session) {
-					sess.Write([]byte("hi"))
-					next(sess)
-				}
-			},
+			bubbletea.Middleware(NewTeaHandler(s.workspace)),
+			activeterm.Middleware(),
 			SlogMiddleware(),
 		),
 	}
@@ -79,6 +84,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	done := make(chan error)
 	go func() {
+		slog.Info(fmt.Sprintf("start listening on %s:%d", s.host, s.port))
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
 			done <- err
 		} else {
@@ -104,6 +110,9 @@ func (s *Server) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&s.host, "host", "127.0.0.1", "server host IP address")
 	f.IntVar(&s.port, "port", 2222, "server port number to run on")
 	f.StringVar(&s.password, "passkey", "", "passkey for server (empty for no auth)")
+	home, _ := os.UserHomeDir()
+	ws := filepath.Join(home, ".local", "tcr")
+	f.StringVar(&s.workspace, "workspace", ws, "dir for git worktree")
 }
 
 func (s *Server) Execute(ctx context.Context, f *flag.FlagSet, _ ...any) subcommands.ExitStatus {
