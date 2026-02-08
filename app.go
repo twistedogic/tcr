@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -19,12 +19,6 @@ import (
 
 type cmdFinishedMsg struct{ err error }
 
-func wrapError(err error) tea.Cmd {
-	return func() tea.Msg {
-		return cmdFinishedMsg{err: err}
-	}
-}
-
 func interactive(sess ssh.Session, dir string, cmd string, args ...string) tea.Cmd {
 	callback := func(err error) tea.Msg {
 		return cmdFinishedMsg{err: err}
@@ -32,7 +26,7 @@ func interactive(sess ssh.Session, dir string, cmd string, args ...string) tea.C
 	if sess != nil {
 		wishCmd := wish.Command(sess, cmd, args...)
 		if dir != "" {
-			wishCmd.SetDir("")
+			wishCmd.SetDir(dir)
 		}
 		return tea.Exec(wishCmd, callback)
 	}
@@ -45,30 +39,28 @@ func cloneForm() *huh.Form {
 		huh.NewGroup(
 			huh.NewInput().Key("owner").Title("owner").Validate(huh.ValidateNotEmpty()),
 			huh.NewInput().Key("repo").Title("repo").Validate(huh.ValidateNotEmpty()),
-		),
+		).Title("Clone git repository"),
 	)
 }
 
-type keyMap struct {
-	New     key.Binding
-	Explore key.Binding
-	Quit    key.Binding
+func newWorktreeForm(repoName string) *huh.Form {
+	return huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().Key("name").Title("worktree name").Validate(huh.ValidateNotEmpty()),
+		).Title(fmt.Sprintf("%s – add new worktree", repoName)),
+	)
 }
 
-func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.New, k.Explore, k.Quit}
-}
-
-func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{k.ShortHelp()}
-}
-
-func defaultKeyMap() keyMap {
-	return keyMap{
-		New:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "clone new repo")),
-		Explore: key.NewBinding(key.WithKeys("e", "enter"), key.WithHelp("e/enter", "explore repo")),
-		Quit:    key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q/esc", "exit")),
-	}
+func deleteConfirmForm(kind, name string) *huh.Form {
+	return huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Key("confirm").
+				Title("Delete " + kind + " " + name + "?").
+				Affirmative("Yes").
+				Negative("No"),
+		),
+	)
 }
 
 type state uint
@@ -76,25 +68,42 @@ type state uint
 const (
 	mainState state = iota
 	newRepoState
+	projectState
+	deleteWorktreeState
+	deleteProjectState
+	newWorktreeState
 )
 
 type model struct {
 	workspace string
-	keyMap    keyMap
 	err       error
 	sess      ssh.Session
 	errStyle  lipgloss.Style
 	form      *huh.Form
 	state     state
+	spinner   spinner.Model
+	loading   bool
+
+	// project list (mainState)
+	projectList     *ProjectList
+	selectedProject *Project
+
+	// worktree list (projectState)
+	project          *Project
+	wtList           *WorktreeList
+	selectedWorktree *Worktree
+
+	client *GitHubPRClient
 }
 
 func NewModel(workspace string, sess ssh.Session, renderer *lipgloss.Renderer) tea.Model {
+	s := spinner.New()
 	return &model{
 		workspace: workspace,
 		sess:      sess,
-		keyMap:    defaultKeyMap(),
 		errStyle:  renderer.NewStyle().Foreground(lipgloss.Color("3")),
-		form:      cloneForm(),
+		spinner:   s,
+		loading:   true,
 	}
 }
 
@@ -106,20 +115,96 @@ func NewTeaHandler(workspace string) bubbletea.Handler {
 	}
 }
 
-func (m *model) Init() tea.Cmd { return nil }
+type projectsLoadedMsg struct {
+	projects []*Project
+	err      error
+}
+
+func (m *model) loadProjects() tea.Msg {
+	repoDir := filepath.Join(m.workspace, "repo")
+	wtDir := filepath.Join(m.workspace, "worktree")
+	projects, err := LoadProjects(context.Background(), repoDir, wtDir)
+	return projectsLoadedMsg{projects: projects, err: err}
+}
+
+func (m *model) startLoadProjects() tea.Cmd {
+	m.loading = true
+	return tea.Batch(m.spinner.Tick, m.loadProjects)
+}
+
+func (m *model) Init() tea.Cmd { return tea.Batch(m.spinner.Tick, m.loadProjects) }
+
+func (m *model) setForm(form *huh.Form, s state) tea.Cmd {
+	m.form = form
+	m.state = s
+	if form != nil {
+		return form.Init()
+	}
+	return nil
+}
 
 func (m *model) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.form.State {
 	case huh.StateAborted:
-		m.form = cloneForm()
-		m.state = mainState
+		switch m.state {
+		case newRepoState:
+			m.setForm(nil, mainState)
+			return m, m.startLoadProjects()
+		case newWorktreeState:
+			m.setForm(nil, projectState)
+		case deleteWorktreeState:
+			m.setForm(nil, projectState)
+		case deleteProjectState:
+			m.selectedProject = nil
+			m.setForm(nil, mainState)
+			return m, m.startLoadProjects()
+		}
 	case huh.StateCompleted:
-		repo := m.form.Get("repo").(string)
-		owner := m.form.Get("owner").(string)
-		m.state = mainState
-		m.form = cloneForm()
-		if err := clone(context.Background(), filepath.Join(m.workspace, "repo"), owner, repo); err != nil {
-			return m, wrapError(err)
+		switch m.state {
+		case newRepoState:
+			repo := m.form.Get("repo").(string)
+			owner := m.form.Get("owner").(string)
+			m.setForm(nil, mainState)
+			if err := clone(context.Background(), filepath.Join(m.workspace, "repo"), owner, repo); err != nil {
+				m.err = err
+			}
+			return m, m.startLoadProjects()
+		case newWorktreeState:
+			name := m.form.Get("name").(string)
+			m.setForm(nil, projectState)
+			if err := m.project.AddWorktree(context.Background(), name); err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.wtList.SetItems(m.project.worktrees)
+			return m, m.startLoadProjects()
+		case deleteWorktreeState:
+			confirmed := m.form.Get("confirm").(bool)
+			m.setForm(nil, projectState)
+			if confirmed {
+				if err := m.project.DeleteWorktree(context.Background(), m.selectedWorktree.Name); err != nil {
+					m.err = err
+					m.selectedWorktree = nil
+					return m, nil
+				}
+				m.wtList.SetItems(m.project.worktrees)
+			}
+			m.selectedWorktree = nil
+		case deleteProjectState:
+			confirmed := m.form.Get("confirm").(bool)
+			repoPath := m.selectedProject.repoPath
+			wtPath := m.selectedProject.worktreePath
+			m.selectedProject = nil
+			m.setForm(nil, mainState)
+			if confirmed {
+				if err := os.RemoveAll(repoPath); err != nil {
+					m.err = err
+				}
+				if err := os.RemoveAll(wtPath); err != nil {
+					m.err = err
+				}
+			}
+			return m, m.startLoadProjects()
 		}
 	default:
 		form, cmd := m.form.Update(msg)
@@ -132,25 +217,132 @@ func (m *model) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Forward spinner tick messages while loading.
+	if _, ok := msg.(spinner.TickMsg); ok && m.loading {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+
+	// Safety net: if a cmdFinishedMsg with an error arrives while still in a
+	// form state, force-recover to the appropriate parent state. Under normal
+	// operation the per-branch fixes handle this; this catch-all protects
+	// against future regressions.
+	if msg, ok := msg.(cmdFinishedMsg); ok && msg.err != nil {
+		switch m.state {
+		case newRepoState, deleteProjectState:
+			m.err = msg.err
+			m.form = nil
+			m.selectedProject = nil
+			m.state = mainState
+			return m, m.startLoadProjects()
+		case newWorktreeState, deleteWorktreeState:
+			m.err = msg.err
+			m.form = nil
+			m.selectedWorktree = nil
+			m.state = projectState
+			return m, nil
+		}
+	}
+
 	switch m.state {
-	case newRepoState:
+	case newRepoState, newWorktreeState, deleteWorktreeState, deleteProjectState:
 		return m.formUpdate(msg)
-	default:
+	case projectState:
 		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			switch {
-			case key.Matches(msg, m.keyMap.New):
-				m.form = cloneForm()
-				m.state = newRepoState
+		case worktreeSelectedMsg:
+			switch msg.action {
+			case ActionReview:
+				m.selectedWorktree = msg.worktree
+				return m, interactive(m.sess, m.selectedWorktree.Path, "tuicr", "--stdout")
+			case ActionInteract:
+				m.selectedWorktree = msg.worktree
+				return m, interactive(m.sess, m.selectedWorktree.Path, "opencode")
+			case ActionCreate:
+				return m, m.setForm(newWorktreeForm(m.project.Title()), newWorktreeState)
+			case ActionDelete:
+				m.selectedWorktree = msg.worktree
+				return m, m.setForm(deleteConfirmForm("worktree", msg.worktree.Name), deleteWorktreeState)
+			case ActionBack:
+				m.project = nil
+				m.wtList = nil
+				m.state = mainState
+				return m, m.startLoadProjects()
+			}
+		case cmdFinishedMsg:
+			if msg.err != nil {
+				m.err = msg.err
+			}
+			// Refresh worktree list after command completes
+			if m.project != nil {
+				if err := m.project.Refresh(context.Background()); err != nil {
+					m.err = err
+				} else {
+					m.wtList.SetItems(m.project.worktrees)
+				}
+			}
+			return m, nil
+		}
+
+		var cmd tea.Cmd
+		mdl, cmd := m.wtList.Update(msg)
+		if wtl, ok := mdl.(*WorktreeList); ok {
+			m.wtList = wtl
+		}
+		return m, cmd
+
+	default: // mainState
+		switch msg := msg.(type) {
+		case projectsLoadedMsg:
+			m.loading = false
+			if msg.err != nil {
+				m.err = msg.err
+			} else {
+				m.err = nil
+			}
+			m.projectList = NewProjectList(msg.projects, 80, 20)
+			if len(msg.projects) == 0 && msg.err == nil {
+				return m, m.setForm(cloneForm(), newRepoState)
+			}
+			return m, nil
+		case projectSelectedMsg:
+			switch msg.action {
+			case ProjectActionExplore:
+				m.project = msg.project
+				m.wtList = NewWorktreeList(m.project.worktrees, 80, 20)
+				m.state = projectState
+				if len(m.project.worktrees) == 0 {
+					return m, m.setForm(newWorktreeForm(m.project.Title()), newWorktreeState)
+				}
 				return m, nil
-			case key.Matches(msg, m.keyMap.Explore):
-				return m, interactive(m.sess, filepath.Join(m.workspace, "worktree"), "opencode")
-			case key.Matches(msg, m.keyMap.Quit):
+			case ProjectActionClone:
+				return m, m.setForm(cloneForm(), newRepoState)
+			case ProjectActionDelete:
+				m.selectedProject = msg.project
+				return m, m.setForm(deleteConfirmForm("project", msg.project.Title()), deleteProjectState)
+			case ProjectActionQuit:
 				return m, tea.Quit
 			}
 		case cmdFinishedMsg:
 			m.err = msg.err
 			return m, nil
+		}
+
+		// Delegate to project list if available
+		if m.projectList != nil {
+			var cmd tea.Cmd
+			mdl, cmd := m.projectList.Update(msg)
+			if pl, ok := mdl.(*ProjectList); ok {
+				m.projectList = pl
+			}
+			return m, cmd
+		}
+		if m.wtList != nil {
+			mdl, cmd := m.wtList.Update(msg)
+			if wl, ok := mdl.(*WorktreeList); ok {
+				m.wtList = wl
+			}
+			return m, cmd
 		}
 	}
 	return m, nil
@@ -158,13 +350,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) View() string {
 	switch m.state {
-	case newRepoState:
+	case newRepoState, newWorktreeState, deleteWorktreeState, deleteProjectState:
 		return m.form.View()
+	case projectState:
+		return m.wtList.View()
+	}
+	if m.err != nil && m.projectList != nil {
+		return m.errStyle.Render(m.err.Error()+"\n") + m.projectList.View()
 	}
 	if m.err != nil {
 		return m.errStyle.Render(m.err.Error() + "\n")
 	}
-	return help.New().View(m.keyMap)
+	if m.projectList != nil {
+		return m.projectList.View()
+	}
+	if m.loading {
+		return m.spinner.View() + " Loading projects..."
+	}
+	return ""
 }
 
 func bootstrapWorkspace(dir string) error {
@@ -187,7 +390,7 @@ func (*appCmd) Synopsis() string { return "start local process" }
 func (*appCmd) Usage() string    { return "" }
 func (a *appCmd) SetFlags(f *flag.FlagSet) {
 	home, _ := os.UserHomeDir()
-	ws := filepath.Join(home, ".local", "tcr")
+	ws := filepath.Join(home, ".local", "share", "tcr")
 	f.StringVar(&a.workspace, "workspace", ws, "dir for git worktree")
 }
 func (a *appCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...any) subcommands.ExitStatus {
@@ -195,8 +398,11 @@ func (a *appCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...any) subcomman
 		return subcommands.ExitFailure
 	}
 	m := NewModel(a.workspace, nil, lipgloss.DefaultRenderer())
+
+	// Run the TUI
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		return subcommands.ExitFailure
 	}
+
 	return subcommands.ExitSuccess
 }

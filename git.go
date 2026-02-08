@@ -6,7 +6,17 @@ import (
 )
 
 func createWorktree(ctx context.Context, repo, tree string) error {
-	_, err := execute(ctx, repo, "git", "worktree", "add", tree)
+	if _, err := execute(ctx, repo, "git", "worktree", "add", tree); err != nil {
+		return err
+	}
+	if _, err := execute(ctx, tree, "openspec", "init", "--tools", "opencode", "--force"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteWorktree(ctx context.Context, repo, tree string) error {
+	_, err := execute(ctx, repo, "git", "worktree", "remove", tree, "--force")
 	return err
 }
 

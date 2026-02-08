@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -48,8 +49,19 @@ type Status struct {
 	Artifacts     []Artifact
 }
 
-func (s Status) ReadyForDevelop() bool {
-	return len(s.ApplyRequires) == 0
+func (s *Status) String() string {
+	switch {
+	case s == nil:
+		return "No openspec setup"
+	case s.ChangeName == "":
+		return "Ready For Change"
+	case s.IsComplete:
+		return "Ready For Review"
+	case len(s.ApplyRequires) == 0:
+		return "Ready For Apply"
+	default:
+		return fmt.Sprintf("Pending – %s", strings.Join(s.ApplyRequires, ", "))
+	}
 }
 
 func showChange(ctx context.Context, path, changeName string) (Status, error) {
