@@ -7,14 +7,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/subcommands"
 )
+
+const perPage = 100
 
 var prUrlPattern = regexp.MustCompile(`https://github\.com/([^/]+)/([^/]+)/pull/(\d+)`)
 
@@ -90,25 +94,26 @@ func resolveToken(cliToken string) string {
 }
 
 type GitHubPRClient struct {
-	baseURL string
-	client  *http.Client
-	token   string
-	owner   string
-	repo    string
+	baseURL     string
+	client      *http.Client
+	token       string
+	rateLimiter *RateLimiter
 }
 
-func NewGitHubPRClient(owner, repo, token string) *GitHubPRClient {
+func NewGitHubPRClient(token string) *GitHubPRClient {
 	client := &http.Client{Timeout: 30 * time.Second}
 	return &GitHubPRClient{
-		baseURL: "https://api.github.com",
-		client:  client,
-		token:   resolveToken(token),
-		owner:   owner,
-		repo:    repo,
+		baseURL:     "https://api.github.com",
+		client:      client,
+		token:       resolveToken(token),
+		rateLimiter: NewRateLimiter(5), // Default 5 req/sec
 	}
 }
 
 func (c *GitHubPRClient) request(ctx context.Context, url string, result any) error {
+	// Apply rate limiting before making the request
+	c.rateLimiter.Wait()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -156,55 +161,87 @@ func (c *GitHubPRClient) request(ctx context.Context, url string, result any) er
 	return nil
 }
 
-func (c *GitHubPRClient) fetchPRMetadata(ctx context.Context, prNumber int) (*GitHubPR, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, c.owner, c.repo, prNumber)
+func (c *GitHubPRClient) fetchPRMetadata(ctx context.Context, owner, repo string, prNumber int) (*GitHubPR, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, owner, repo, prNumber)
 	var pr GitHubPR
 	err := c.request(ctx, url, &pr)
 	return &pr, err
 }
 
-func (c *GitHubPRClient) fetchReviewComments(ctx context.Context, prNumber int) ([]GitHubComment, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/comments", c.baseURL, c.owner, c.repo, prNumber)
+func (c *GitHubPRClient) fetchReviewComments(ctx context.Context, owner, repo string, prNumber int) ([]GitHubComment, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/comments", c.baseURL, owner, repo, prNumber)
 	var comments []GitHubComment
 	err := c.request(ctx, url, &comments)
 	return comments, err
 }
 
-// fetchLatestOpenPR fetches the most recently created open PR for the repository
-func (c *GitHubPRClient) fetchLatestOpenPR(ctx context.Context) (*GitHubPR, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open&sort=created&direction=desc&per_page=1", c.baseURL, c.owner, c.repo)
+func (c *GitHubPRClient) listPRs(ctx context.Context, owner, repo string, value url.Values) ([]*GitHubPR, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls", c.baseURL, owner, repo)
+	url += "?" + value.Encode()
 	var prs []*GitHubPR
 	err := c.request(ctx, url, &prs)
+	return prs, err
+}
+
+func (c *GitHubPRClient) listAllPRs(ctx context.Context, owner, repo string, kv ...string) ([]*GitHubPR, error) {
+	allPRs := make([]*GitHubPR, 0, perPage)
+	page := 1
+	if len(kv)%2 != 0 {
+		return nil, fmt.Errorf("query string is not in pairs")
+	}
+	qs := url.Values{}
+	for keyValues := range slices.Chunk(kv, 2) {
+		qs.Set(keyValues[0], keyValues[1])
+	}
+	qs.Set("per_page", strconv.Itoa(perPage))
+	qs.Set("page", strconv.Itoa(page))
+
+	for {
+		prs, err := c.listPRs(ctx, owner, repo, qs)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(prs) == 0 {
+			break
+		}
+
+		allPRs = append(allPRs, prs...)
+
+		// Stop if we got fewer than perPage results (last page)
+		if len(prs) < perPage {
+			break
+		}
+		page++
+		qs.Set("page", strconv.Itoa(page))
+	}
+	return allPRs, nil
+}
+
+// fetchLatestOpenPR fetches the most recently created open PR for the repository
+func (c *GitHubPRClient) fetchLatestOpenPR(ctx context.Context, owner, repo string) (*GitHubPR, error) {
+	qs := url.Values{}
+	qs.Set("state", "open")
+	qs.Set("sort", "created")
+	qs.Set("direction", "desc")
+	qs.Set("per_page", "1")
+	prs, err := c.listPRs(ctx, owner, repo, qs)
 	if err != nil {
 		return nil, err
 	}
-
 	if len(prs) == 0 {
-		return nil, fmt.Errorf("no open pull requests found for %s/%s", c.owner, c.repo)
+		return nil, fmt.Errorf("no open pull requests found for %s/%s", owner, repo)
 	}
 	return prs[0], nil
 
 }
 
-func (c *GitHubPRClient) Review(ctx context.Context, prNumber int) (*FormattedReview, error) {
-	// Fetch PR metadata
-	var pr *GitHubPR
-	if prNumber <= 0 {
-		latest, err := c.fetchLatestOpenPR(ctx)
-		if err != nil {
-			return nil, err
-		}
-		pr = latest
-	} else {
-		npr, err := c.fetchPRMetadata(ctx, prNumber)
-		if err != nil {
-			return nil, err
-		}
-		pr = npr
+func (c *GitHubPRClient) Comments(ctx context.Context, owner, repo string, prNumber int) (*FormattedReview, error) {
+	pr, err := c.fetchPRMetadata(ctx, owner, repo, prNumber)
+	if err != nil {
+		return nil, err
 	}
-
-	// Fetch review comments (inline code comments)
-	comments, err := c.fetchReviewComments(ctx, pr.Number)
+	comments, err := c.fetchReviewComments(ctx, owner, repo, prNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +256,28 @@ func (c *GitHubPRClient) Review(ctx context.Context, prNumber int) (*FormattedRe
 		CommitSha: pr.Head.CommitSha,
 		Comments:  reviewComments,
 	}, nil
+}
+
+func (c *GitHubPRClient) Review(ctx context.Context, owner, repo string, prNumber int) (*FormattedReview, error) {
+	// Fetch PR metadata
+	if prNumber <= 0 {
+		latest, err := c.fetchLatestOpenPR(ctx, owner, repo)
+		if err != nil {
+			return nil, err
+		}
+		prNumber = latest.Number
+	}
+	return c.Comments(ctx, owner, repo, prNumber)
+}
+
+func (c *GitHubPRClient) FetchBranchPRs(ctx context.Context, owner, repo, branch string) ([]*GitHubPR, error) {
+	return c.listAllPRs(
+		ctx, owner, repo,
+		"state", "open",
+		"head", owner+":"+branch,
+		"sort", "created",
+		"direction", "desc",
+	)
 }
 
 type githubCmd struct {
@@ -262,8 +321,8 @@ func (g *githubCmd) Execute(ctx context.Context, f *flag.FlagSet, _ ...any) subc
 		prInfo = info
 	}
 
-	client := NewGitHubPRClient(prInfo.Owner, prInfo.Repo, "")
-	review, err := client.Review(ctx, prInfo.Number)
+	client := NewGitHubPRClient("")
+	review, err := client.Review(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number)
 	if err != nil {
 		fmt.Println(err)
 		return subcommands.ExitFailure

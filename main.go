@@ -10,7 +10,6 @@ import (
 
 func main() {
 	subcommands.Register(&githubCmd{}, "")
-	subcommands.Register(&tuicrCmd{}, "")
 	subcommands.Register(&Server{}, "")
 	subcommands.Register(&appCmd{}, "")
 
