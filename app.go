@@ -143,7 +143,9 @@ func (m *model) setForm(form *huh.Form, s state) tea.Cmd {
 	return nil
 }
 
-func (m *model) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+// handleFormDone processes a form that has reached StateCompleted or
+// StateAborted and transitions the model back to the appropriate parent state.
+func (m *model) handleFormDone() (tea.Model, tea.Cmd) {
 	switch m.form.State {
 	case huh.StateAborted:
 		switch m.state {
@@ -206,14 +208,32 @@ func (m *model) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.startLoadProjects()
 		}
-	default:
-		form, cmd := m.form.Update(msg)
-		if f, ok := form.(*huh.Form); ok {
-			m.form = f
-			return m, cmd
-		}
 	}
 	return m, nil
+}
+
+func (m *model) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// If the form already reached a terminal state (e.g. from a previous
+	// update cycle), handle it immediately.
+	if m.form.State == huh.StateAborted || m.form.State == huh.StateCompleted {
+		return m.handleFormDone()
+	}
+
+	// Forward the message to the form.
+	form, cmd := m.form.Update(msg)
+	if f, ok := form.(*huh.Form); ok {
+		m.form = f
+	}
+
+	// Re-check: the update may have transitioned the form to a terminal
+	// state. Handle it now so that View() never renders an empty completed
+	// form (which causes the blank-screen flash).
+	if m.form.State == huh.StateAborted || m.form.State == huh.StateCompleted {
+		mdl, formDone := m.handleFormDone()
+		return mdl, tea.Batch(cmd, formDone)
+	}
+
+	return m, cmd
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
