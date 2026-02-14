@@ -46,11 +46,31 @@ func SlogMiddleware() wish.Middleware {
 	}
 }
 
+func fetchReviews(ctx context.Context, client *GitHubPRClient, workspace string) error {
+	projects, err := LoadWorkspace(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	for _, p := range projects {
+		for _, w := range p.worktrees {
+			hasReview, err := w.review(ctx, client)
+			if err != nil {
+				return err
+			}
+			if hasReview {
+				slog.Info("got review", "repo", p.Title(), "branch", w.Name)
+			}
+		}
+	}
+	return nil
+}
+
 type Server struct {
 	host      string
 	port      int
 	password  string
 	workspace string
+	interval  time.Duration
 }
 
 func (s *Server) passkey() string {
@@ -91,6 +111,16 @@ func (s *Server) Start(ctx context.Context) error {
 			done <- nil
 		}
 	}()
+	go func() {
+		client := NewGitHubPRClient("")
+		for range time.Tick(s.interval) {
+			tCtx, cancel := context.WithTimeout(ctx, s.interval)
+			if err := fetchReviews(tCtx, client, s.workspace); err != nil {
+				slog.Error(err.Error())
+			}
+			cancel()
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -110,8 +140,9 @@ func (s *Server) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&s.host, "host", "127.0.0.1", "server host IP address")
 	f.IntVar(&s.port, "port", 2222, "server port number to run on")
 	f.StringVar(&s.password, "passkey", "", "passkey for server (empty for no auth)")
+	f.DurationVar(&s.interval, "interval", 15*time.Minute, "review refresh interval")
 	home, _ := os.UserHomeDir()
-	ws := filepath.Join(home, ".local", "tcr")
+	ws := filepath.Join(home, ".local", "share", "tcr")
 	f.StringVar(&s.workspace, "workspace", ws, "dir for git worktree")
 }
 

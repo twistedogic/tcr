@@ -39,12 +39,12 @@ func (w *Worktree) review(ctx context.Context, client *GitHubPRClient) (bool, er
 		return false, err
 	}
 	if len(prs) == 0 {
-		return true, nil
+		return false, nil
 	}
 	pr := prs[0]
 	comments, err := client.Comments(ctx, w.Owner, w.Repo, pr.Number)
 	if _, err := ocPrompt(ctx, w.Path, w.Model, comments.String()); err != nil {
-		return false, err
+		return true, err
 	}
 	if err := amendCommit(ctx, w.Path); err != nil {
 		return false, err
@@ -53,7 +53,7 @@ func (w *Worktree) review(ctx context.Context, client *GitHubPRClient) (bool, er
 }
 
 // implements list.Item
-func (w *Worktree) Title() string       { return w.Name }
+func (w *Worktree) Title() string       { return fmt.Sprintf("%s/%s – %s", w.Owner, w.Repo, w.Name) }
 func (w *Worktree) Description() string { return w.Status.String() }
 func (w *Worktree) FilterValue() string { return w.Name }
 
@@ -106,7 +106,12 @@ func (p *Project) Refresh(ctx context.Context) error {
 	p.worktrees = make([]*Worktree, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
-			wt := &Worktree{Name: entry.Name(), Path: filepath.Join(p.worktreePath, entry.Name())}
+			wt := &Worktree{
+				Name:  entry.Name(),
+				Path:  filepath.Join(p.worktreePath, entry.Name()),
+				Owner: p.owner,
+				Repo:  p.repo,
+			}
 			if err := wt.refresh(ctx); err != nil {
 				return err
 			}
@@ -183,4 +188,10 @@ func LoadProjects(ctx context.Context, repoDir, worktreeDir string) ([]*Project,
 		}
 	}
 	return projects, nil
+}
+
+func LoadWorkspace(ctx context.Context, workspace string) ([]*Project, error) {
+	repoDir := filepath.Join(workspace, "repo")
+	worktreeDir := filepath.Join(workspace, "worktree")
+	return LoadProjects(ctx, repoDir, worktreeDir)
 }
