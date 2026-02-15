@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -46,11 +47,7 @@ func SlogMiddleware() wish.Middleware {
 	}
 }
 
-func fetchReviews(ctx context.Context, client *GitHubPRClient, workspace string) error {
-	projects, err := LoadWorkspace(ctx, workspace)
-	if err != nil {
-		return err
-	}
+func fetchReviews(ctx context.Context, client *GitHubPRClient, projects []*Project) error {
 	for _, p := range projects {
 		for _, w := range p.worktrees {
 			hasReview, err := w.review(ctx, client)
@@ -59,6 +56,24 @@ func fetchReviews(ctx context.Context, client *GitHubPRClient, workspace string)
 			}
 			if hasReview {
 				slog.Info("got review", "repo", p.Title(), "branch", w.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func applyChanges(ctx context.Context, projects []*Project) error {
+	for _, p := range projects {
+		for _, w := range p.worktrees {
+			switch {
+			case w.Status.IsComplete:
+			case len(w.Status.ApplyRequires) == 1 && slices.Contains(w.Status.ApplyRequires, "tasks"):
+				if _, err := ocCommand(ctx, w.Path, w.Model, "opsx-apply"); err != nil {
+					return err
+				}
+				if err := push(ctx, w.Path); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -115,7 +130,14 @@ func (s *Server) Start(ctx context.Context) error {
 		client := NewGitHubPRClient("")
 		for range time.Tick(s.interval) {
 			tCtx, cancel := context.WithTimeout(ctx, s.interval)
-			if err := fetchReviews(tCtx, client, s.workspace); err != nil {
+			projects, err := LoadWorkspace(tCtx, s.workspace)
+			if err != nil {
+				slog.Error(err.Error())
+			}
+			if err := fetchReviews(tCtx, client, projects); err != nil {
+				slog.Error(err.Error())
+			}
+			if err := applyChanges(tCtx, projects); err != nil {
 				slog.Error(err.Error())
 			}
 			cancel()
