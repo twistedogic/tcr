@@ -376,7 +376,7 @@ func (m *model) View() string {
 		return m.wtList.View()
 	}
 	if m.err != nil && m.projectList != nil {
-		return m.errStyle.Render(m.err.Error()+"\n") + m.projectList.View()
+		return m.errStyle.Render(m.err.Error()+"\n\n") + m.projectList.View()
 	}
 	if m.err != nil {
 		return m.errStyle.Render(m.err.Error() + "\n")

@@ -2,31 +2,25 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 )
 
 type Change struct {
-	Name           string    `json:"name"`
-	CompletedTasks int       `json:"completedTasks"`
-	TotalTasks     int       `json:"totalTasks"`
-	LastModified   time.Time `json:"lastModified"`
-	Status         string    `json:"status"`
+	Name         string    `json:"name"`
+	LastModified time.Time `json:"lastModified"`
+	Status       string    `json:"status"`
 }
+
 type ListChange struct {
 	Changes []Change `json:"changes"`
 }
 
 func listChanges(ctx context.Context, path string) ([]string, error) {
 	var list ListChange
-	b, err := execute(ctx, path, "openspec", "list", "--json")
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, b)
-	}
-	if err := json.Unmarshal(b, &list); err != nil {
-		return nil, err
+	if err := executeJSON(ctx, &list, path, "openspec", "list", "--json"); err != nil {
+		return nil, fmt.Errorf("unmarshal openspec list: %w", err)
 	}
 	changes := make([]string, 0, len(list.Changes))
 	for _, c := range list.Changes {
@@ -36,17 +30,16 @@ func listChanges(ctx context.Context, path string) ([]string, error) {
 }
 
 type Artifact struct {
-	Id          string
-	OutputPath  string
-	Status      string
-	MissingDeps []string
+	Id          string   `json:"id"`
+	Status      string   `json:"status"`
+	MissingDeps []string `json:"missingDeps,omitempty"`
 }
 
 type Status struct {
-	ChangeName    string
-	IsComplete    bool
-	ApplyRequires []string
-	Artifacts     []Artifact
+	ChangeName    string     `json:"changeName"`
+	IsComplete    bool       `json:"isComplete"`
+	ApplyRequires []string   `json:"applyRequires,omitempty"`
+	Artifacts     []Artifact `json:"artifacts,omitempty"`
 }
 
 func (s *Status) String() string {
@@ -66,10 +59,8 @@ func (s *Status) String() string {
 
 func showChange(ctx context.Context, path, changeName string) (Status, error) {
 	var status Status
-	b, err := execute(ctx, path, "openspec", "status", "--change", changeName, "--json")
-	if err != nil {
-		return status, err
+	if err := executeJSON(ctx, &status, path, "openspec", "status", "--change", changeName, "--json"); err != nil {
+		return status, fmt.Errorf("unmarshal openspec status: %w", err)
 	}
-	err = json.Unmarshal(b, &status)
-	return status, err
+	return status, nil
 }
