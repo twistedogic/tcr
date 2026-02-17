@@ -8,7 +8,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 )
+
+const maxConcurrency = 4
 
 type Worktree struct {
 	Owner  string
@@ -103,21 +107,50 @@ func (p *Project) Refresh(ctx context.Context) error {
 		}
 		return err
 	}
-	p.worktrees = make([]*Worktree, 0, len(entries))
+
+	// Create errgroup with context and limit concurrency
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrency)
+
+	// Pre-allocate worktrees slice with length matching entries
+	p.worktrees = make([]*Worktree, len(entries))
+
+	// Process directories concurrently with bounded concurrency
+	idx := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
-			wt := &Worktree{
-				Name:  entry.Name(),
-				Path:  filepath.Join(p.worktreePath, entry.Name()),
-				Owner: p.owner,
-				Repo:  p.repo,
-			}
-			if err := wt.refresh(ctx); err != nil {
-				return err
-			}
-			p.worktrees = append(p.worktrees, wt)
+			currentIdx := idx
+			dirName := entry.Name()
+			g.Go(func() error {
+				wt := &Worktree{
+					Name:  dirName,
+					Path:  filepath.Join(p.worktreePath, dirName),
+					Owner: p.owner,
+					Repo:  p.repo,
+				}
+				if err := wt.refresh(ctx); err != nil {
+					return err
+				}
+				p.worktrees[currentIdx] = wt
+				return nil
+			})
+			idx++
 		}
 	}
+
+	// Wait for all goroutines and return first error if any
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Filter nil entries and sort
+	result := make([]*Worktree, 0, len(p.worktrees))
+	for _, wt := range p.worktrees {
+		if wt != nil {
+			result = append(result, wt)
+		}
+	}
+	p.worktrees = result
 	slices.SortFunc(p.worktrees, compareWorktree)
 	return nil
 }
@@ -177,17 +210,46 @@ func LoadProjects(ctx context.Context, repoDir, worktreeDir string) ([]*Project,
 	if err != nil {
 		return nil, err
 	}
-	projects := make([]*Project, 0, len(entries))
+
+	// Create errgroup with context and limit concurrency
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrency)
+
+	// Pre-allocate projects slice with length matching entries
+	projects := make([]*Project, len(entries))
+
+	// Process directories concurrently with bounded concurrency
+	idx := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
-			p, err := LoadProject(ctx, filepath.Join(repoDir, entry.Name()), worktreeDir)
-			if err != nil {
-				return nil, err
-			}
-			projects = append(projects, p)
+			currentIdx := idx
+			dirName := entry.Name()
+			g.Go(func() error {
+				p, err := LoadProject(ctx, filepath.Join(repoDir, dirName), worktreeDir)
+				if err != nil {
+					return err
+				}
+				projects[currentIdx] = p
+				return nil
+			})
+			idx++
 		}
 	}
-	return projects, nil
+
+	// Wait for all goroutines and return first error if any
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Filter nil entries from result slice
+	result := make([]*Project, 0, len(projects))
+	for _, p := range projects {
+		if p != nil {
+			result = append(result, p)
+		}
+	}
+
+	return result, nil
 }
 
 func LoadWorkspace(ctx context.Context, workspace string) ([]*Project, error) {

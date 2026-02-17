@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/wish v1.4.7
 	github.com/google/subcommands v1.2.0
 	github.com/stretchr/testify v1.10.0
+	golang.org/x/sync v0.19.0
 )
 
 require (
