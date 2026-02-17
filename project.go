@@ -47,6 +47,9 @@ func (w *Worktree) review(ctx context.Context, client *GitHubPRClient) (bool, er
 	}
 	pr := prs[0]
 	comments, err := client.Comments(ctx, w.Owner, w.Repo, pr.Number)
+	if len(comments.Comments) == 0 {
+		return false, nil
+	}
 	if _, err := ocPrompt(ctx, w.Path, w.Model, comments.String()); err != nil {
 		return true, err
 	}

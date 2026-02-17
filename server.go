@@ -80,6 +80,15 @@ func applyChanges(ctx context.Context, projects []*Project) error {
 	return nil
 }
 
+func pullMain(ctx context.Context, projects []*Project) error {
+	for _, p := range projects {
+		if err := pull(ctx, p.repoPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type Server struct {
 	host      string
 	port      int
@@ -132,6 +141,9 @@ func (s *Server) Start(ctx context.Context) error {
 			tCtx, cancel := context.WithTimeout(ctx, s.interval)
 			projects, err := LoadWorkspace(tCtx, s.workspace)
 			if err != nil {
+				slog.Error(err.Error())
+			}
+			if err := pullMain(tCtx, projects); err != nil {
 				slog.Error(err.Error())
 			}
 			if err := fetchReviews(tCtx, client, projects); err != nil {

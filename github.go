@@ -33,15 +33,20 @@ func (i *GitHubPRInfo) Path() string {
 	return fmt.Sprintf("/repos/%s/%s/pulls/%d", i.Owner, i.Repo, i.Number)
 }
 
+type Branch struct {
+	CommitSha string `json:"sha"`
+	Repo      struct {
+		PushedAt time.Time `json:"pushed_at"`
+	} `json:"repo"`
+}
+
 // GitHubPR represents GitHub PR metadata
 type GitHubPR struct {
 	Title     string    `json:"title"`
 	Number    int       `json:"number"`
 	CreatedAt time.Time `json:"created_at"`
 	HTMLURL   string    `json:"html_url"`
-	Head      struct {
-		CommitSha string `json:"sha"`
-	} `json:"head"`
+	Head      Branch    `json:"head"`
 }
 
 // GitHubComment represents different types of GitHub comments
@@ -64,6 +69,7 @@ func (c GitHubComment) ToFormattedComment() FormattedComment {
 		File:      c.Path,
 		Line:      c.Line,
 		IsOldSide: strings.ToLower(c.Side) == "left",
+		CreatedAt: c.CreatedAt,
 	}
 }
 
@@ -248,7 +254,7 @@ func (c *GitHubPRClient) Comments(ctx context.Context, owner, repo string, prNum
 
 	reviewComments := make([]FormattedComment, 0, len(comments))
 	for _, c := range comments {
-		if pr.Head.CommitSha == c.CommitSha {
+		if pr.Head.CommitSha == c.CommitSha && pr.Head.Repo.PushedAt.Before(c.CreatedAt) {
 			reviewComments = append(reviewComments, c.ToFormattedComment())
 		}
 	}

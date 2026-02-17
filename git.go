@@ -41,6 +41,11 @@ func push(ctx context.Context, path string) error {
 	return err
 }
 
+func pull(ctx context.Context, path string) error {
+	_, err := execute(ctx, path, "git", "pull")
+	return err
+}
+
 func clone(ctx context.Context, path, owner, repo string) error {
 	repoLink := fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
 	_, err := execute(ctx, path, "git", "clone", repoLink)

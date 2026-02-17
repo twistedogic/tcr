@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // FormattedComment holds comment data with metadata for sorting and formatting
@@ -15,6 +16,7 @@ type FormattedComment struct {
 	Type      string
 	Content   string
 	Index     int
+	CreatedAt time.Time
 }
 
 func compareFormattedComment(a, b FormattedComment) int {
