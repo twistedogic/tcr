@@ -277,7 +277,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, interactive(m.sess, m.selectedWorktree.Path, "tuicr", "--stdout")
 			case ActionInteract:
 				m.selectedWorktree = msg.worktree
-				return m, interactive(m.sess, m.selectedWorktree.Path, "opencode")
+				return m, interactive(m.sess, m.selectedWorktree.Path, cfg.Interactive.Agent, cfg.Interactive.Args...)
 			case ActionCreate:
 				return m, m.setForm(newWorktreeForm(m.project.Title()), newWorktreeState)
 			case ActionDelete:

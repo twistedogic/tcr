@@ -9,9 +9,6 @@ func createWorktree(ctx context.Context, repo, tree string) error {
 	if _, err := execute(ctx, repo, "git", "worktree", "add", tree); err != nil {
 		return err
 	}
-	if _, err := execute(ctx, tree, "openspec", "init", "--tools", "opencode", "--force"); err != nil {
-		return err
-	}
 	return nil
 }
 

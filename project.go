@@ -19,7 +19,6 @@ type Worktree struct {
 	Repo   string
 	Name   string
 	Path   string
-	Model  string
 	Status *Status
 }
 
@@ -35,28 +34,6 @@ func (w *Worktree) refresh(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (w *Worktree) review(ctx context.Context, client *GitHubPRClient) (bool, error) {
-	prs, err := client.FetchBranchPRs(ctx, w.Owner, w.Repo, w.Name)
-	if err != nil {
-		return false, err
-	}
-	if len(prs) == 0 {
-		return false, nil
-	}
-	pr := prs[0]
-	comments, err := client.Comments(ctx, w.Owner, w.Repo, pr.Number)
-	if len(comments.Comments) == 0 {
-		return false, nil
-	}
-	if _, err := ocPrompt(ctx, w.Path, w.Model, comments.String()); err != nil {
-		return true, err
-	}
-	if err := amendCommit(ctx, w.Path); err != nil {
-		return false, err
-	}
-	return false, push(ctx, w.Path)
 }
 
 // implements list.Item
