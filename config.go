@@ -45,6 +45,16 @@ func loadConfig() error {
 	data, err := os.ReadFile(configPath)
 	if os.IsNotExist(err) {
 		cfg = defaultConfig
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			return fmt.Errorf("could not create config directory: %w", err)
+		}
+		out, err := yaml.Marshal(defaultConfig)
+		if err != nil {
+			return fmt.Errorf("could not marshal default config: %w", err)
+		}
+		if err := os.WriteFile(configPath, out, 0644); err != nil {
+			return fmt.Errorf("could not write default config to %s: %w", configPath, err)
+		}
 		return nil
 	}
 	if err != nil {
