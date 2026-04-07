@@ -93,7 +93,6 @@ type model struct {
 	project          *Project
 	wtList           *WorktreeList
 	selectedWorktree *Worktree
-
 }
 
 func NewModel(workspace string, sess ssh.Session, renderer *lipgloss.Renderer) tea.Model {

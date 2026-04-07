@@ -104,16 +104,23 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 	go func() {
-		for range time.Tick(s.interval) {
-			tCtx, cancel := context.WithTimeout(ctx, s.interval)
-			projects, err := LoadWorkspace(tCtx, s.workspace)
-			if err != nil {
-				slog.Error(err.Error())
+		ticker := time.NewTicker(s.interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				tCtx, cancel := context.WithTimeout(ctx, s.interval)
+				projects, err := LoadWorkspace(tCtx, s.workspace)
+				if err != nil {
+					slog.Error(err.Error())
+				}
+				if err := pullMain(tCtx, projects); err != nil {
+					slog.Error(err.Error())
+				}
+				cancel()
 			}
-			if err := pullMain(tCtx, projects); err != nil {
-				slog.Error(err.Error())
-			}
-			cancel()
 		}
 	}()
 	select {

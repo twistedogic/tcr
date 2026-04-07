@@ -23,15 +23,17 @@ type Worktree struct {
 }
 
 func (w *Worktree) refresh(ctx context.Context) error {
-	if changes, err := listChanges(ctx, w.Path); err == nil {
-		w.Status = &Status{}
-		if len(changes) > 0 {
-			status, err := showChange(ctx, w.Path, changes[0])
-			if err != nil {
-				return err
-			}
-			w.Status = &status
+	changes, err := listChanges(ctx, w.Path)
+	if err != nil {
+		return fmt.Errorf("list changes in %s: %w", w.Path, err)
+	}
+	w.Status = &Status{}
+	if len(changes) > 0 {
+		status, err := showChange(ctx, w.Path, changes[0])
+		if err != nil {
+			return fmt.Errorf("show change %s in %s: %w", changes[0], w.Path, err)
 		}
+		w.Status = &status
 	}
 	return nil
 }
@@ -238,6 +240,8 @@ func LoadProjects(ctx context.Context, workspace string) ([]*Project, error) {
 	return result, nil
 }
 
+// LoadWorkspace is an alias for LoadProjects for backward compatibility.
+// Deprecated: Use LoadProjects directly.
 func LoadWorkspace(ctx context.Context, workspace string) ([]*Project, error) {
 	return LoadProjects(ctx, workspace)
 }
