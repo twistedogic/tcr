@@ -15,7 +15,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	subcommands.Register(&githubCmd{}, "")
 	subcommands.Register(&Server{}, "")
 	subcommands.Register(&appCmd{}, "")
 

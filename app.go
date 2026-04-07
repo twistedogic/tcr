@@ -93,7 +93,6 @@ type model struct {
 	wtList           *WorktreeList
 	selectedWorktree *Worktree
 
-	client *GitHubPRClient
 }
 
 func NewModel(workspace string, sess ssh.Session, renderer *lipgloss.Renderer) tea.Model {
