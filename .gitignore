@@ -1,4 +1,6 @@
 .opencode
+.crush
+.pi
 openspec
 tcr
 id_ed25519*
