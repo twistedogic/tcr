@@ -47,25 +47,23 @@ type Project struct {
 	repo  string
 	owner string
 
-	worktreePath string
-	repoPath     string
-	worktrees    []*Worktree
+	path      string
+	worktrees []*Worktree
 }
 
 // implements list.Item
 func (p *Project) Title() string       { return fmt.Sprintf("%s/%s", p.owner, p.repo) }
-func (p *Project) Description() string { return fmt.Sprintf("%d worktrees", len(p.worktrees)) }
+func (p *Project) Description() string { return fmt.Sprintf("%d branches", len(p.worktrees)) }
 func (p *Project) FilterValue() string { return p.Title() }
 
 func (p *Project) AddWorktree(ctx context.Context, name string) error {
-	if err := os.MkdirAll(p.worktreePath, 0755); err != nil {
+	if err := os.MkdirAll(p.path, 0755); err != nil {
 		return err
 	}
-	path := filepath.Join(p.worktreePath, name)
-	if err := createWorktree(ctx, p.repoPath, path); err != nil {
+	if err := createBranch(ctx, p.path, p.owner, p.repo, name); err != nil {
 		return err
 	}
-	wt := &Worktree{Name: name, Path: path}
+	wt := &Worktree{Name: name, Path: filepath.Join(p.path, name), Owner: p.owner, Repo: p.repo}
 	if err := wt.refresh(ctx); err != nil {
 		return err
 	}
@@ -79,7 +77,7 @@ func (p *Project) AddWorktree(ctx context.Context, name string) error {
 }
 
 func (p *Project) Refresh(ctx context.Context) error {
-	entries, err := os.ReadDir(p.worktreePath)
+	entries, err := os.ReadDir(p.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			p.worktrees = nil
@@ -88,14 +86,11 @@ func (p *Project) Refresh(ctx context.Context) error {
 		return err
 	}
 
-	// Create errgroup with context and limit concurrency
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrency)
 
-	// Pre-allocate worktrees slice with length matching entries
 	p.worktrees = make([]*Worktree, len(entries))
 
-	// Process directories concurrently with bounded concurrency
 	idx := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -104,7 +99,7 @@ func (p *Project) Refresh(ctx context.Context) error {
 			g.Go(func() error {
 				wt := &Worktree{
 					Name:  dirName,
-					Path:  filepath.Join(p.worktreePath, dirName),
+					Path:  filepath.Join(p.path, dirName),
 					Owner: p.owner,
 					Repo:  p.repo,
 				}
@@ -118,12 +113,10 @@ func (p *Project) Refresh(ctx context.Context) error {
 		}
 	}
 
-	// Wait for all goroutines and return first error if any
 	if err := g.Wait(); err != nil {
 		return err
 	}
 
-	// Filter nil entries and sort
 	result := make([]*Worktree, 0, len(p.worktrees))
 	for _, wt := range p.worktrees {
 		if wt != nil {
@@ -154,30 +147,48 @@ func parseOrigin(origin string) (owner, repo string, err error) {
 	return
 }
 
-func LoadProject(ctx context.Context, path, worktreeDir string) (*Project, error) {
-	b, err := execute(ctx, path, "git", "remote", "get-url", "origin")
+// LoadProject loads a project from workspace/<repo> by reading the remote
+// origin of any branch checkout found inside it.
+func LoadProject(ctx context.Context, path string) (*Project, error) {
+	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
 	}
-	owner, repo, err := parseOrigin(strings.TrimSpace(string(b)))
-	if err != nil {
-		return nil, err
+
+	var owner, repo string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		branchPath := filepath.Join(path, entry.Name())
+		b, err := execute(ctx, branchPath, "git", "remote", "get-url", "origin")
+		if err != nil {
+			continue
+		}
+		owner, repo, err = parseOrigin(strings.TrimSpace(string(b)))
+		if err != nil {
+			continue
+		}
+		break
 	}
+
+	if owner == "" || repo == "" {
+		return nil, fmt.Errorf("could not determine repo origin from %s", path)
+	}
+
 	p := &Project{
-		owner:        owner,
-		repo:         repo,
-		worktreePath: filepath.Join(worktreeDir, repo),
-		repoPath:     path,
+		owner: owner,
+		repo:  repo,
+		path:  path,
 	}
 	return p, p.Refresh(ctx)
 }
 
 func (p *Project) DeleteWorktree(ctx context.Context, name string) error {
-	path := filepath.Join(p.worktreePath, name)
-	if err := deleteWorktree(ctx, p.repoPath, path); err != nil {
+	path := filepath.Join(p.path, name)
+	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
-	// Remove from slice
 	idx, found := slices.BinarySearchFunc(p.worktrees, &Worktree{Name: name}, compareWorktree)
 	if found {
 		p.worktrees = append(p.worktrees[:idx], p.worktrees[idx+1:]...)
@@ -185,27 +196,24 @@ func (p *Project) DeleteWorktree(ctx context.Context, name string) error {
 	return nil
 }
 
-func LoadProjects(ctx context.Context, repoDir, worktreeDir string) ([]*Project, error) {
-	entries, err := os.ReadDir(repoDir)
+func LoadProjects(ctx context.Context, workspace string) ([]*Project, error) {
+	entries, err := os.ReadDir(workspace)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create errgroup with context and limit concurrency
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrency)
 
-	// Pre-allocate projects slice with length matching entries
 	projects := make([]*Project, len(entries))
 
-	// Process directories concurrently with bounded concurrency
 	idx := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			currentIdx := idx
 			dirName := entry.Name()
 			g.Go(func() error {
-				p, err := LoadProject(ctx, filepath.Join(repoDir, dirName), worktreeDir)
+				p, err := LoadProject(ctx, filepath.Join(workspace, dirName))
 				if err != nil {
 					return err
 				}
@@ -216,12 +224,10 @@ func LoadProjects(ctx context.Context, repoDir, worktreeDir string) ([]*Project,
 		}
 	}
 
-	// Wait for all goroutines and return first error if any
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
-	// Filter nil entries from result slice
 	result := make([]*Project, 0, len(projects))
 	for _, p := range projects {
 		if p != nil {
@@ -233,7 +239,5 @@ func LoadProjects(ctx context.Context, repoDir, worktreeDir string) ([]*Project,
 }
 
 func LoadWorkspace(ctx context.Context, workspace string) ([]*Project, error) {
-	repoDir := filepath.Join(workspace, "repo")
-	worktreeDir := filepath.Join(workspace, "worktree")
-	return LoadProjects(ctx, repoDir, worktreeDir)
+	return LoadProjects(ctx, workspace)
 }

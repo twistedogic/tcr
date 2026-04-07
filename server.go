@@ -48,8 +48,10 @@ func SlogMiddleware() wish.Middleware {
 
 func pullMain(ctx context.Context, projects []*Project) error {
 	for _, p := range projects {
-		if err := pull(ctx, p.repoPath); err != nil {
-			return err
+		for _, wt := range p.worktrees {
+			if err := pull(ctx, wt.Path); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

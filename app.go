@@ -120,9 +120,7 @@ type projectsLoadedMsg struct {
 }
 
 func (m *model) loadProjects() tea.Msg {
-	repoDir := filepath.Join(m.workspace, "repo")
-	wtDir := filepath.Join(m.workspace, "worktree")
-	projects, err := LoadProjects(context.Background(), repoDir, wtDir)
+	projects, err := LoadProjects(context.Background(), m.workspace)
 	return projectsLoadedMsg{projects: projects, err: err}
 }
 
@@ -166,7 +164,7 @@ func (m *model) handleFormDone() (tea.Model, tea.Cmd) {
 			repo := m.form.Get("repo").(string)
 			owner := m.form.Get("owner").(string)
 			m.setForm(nil, mainState)
-			if err := clone(context.Background(), filepath.Join(m.workspace, "repo"), owner, repo); err != nil {
+			if err := clone(context.Background(), m.workspace, owner, repo); err != nil {
 				m.err = err
 			}
 			return m, m.startLoadProjects()
@@ -193,15 +191,11 @@ func (m *model) handleFormDone() (tea.Model, tea.Cmd) {
 			m.selectedWorktree = nil
 		case deleteProjectState:
 			confirmed := m.form.Get("confirm").(bool)
-			repoPath := m.selectedProject.repoPath
-			wtPath := m.selectedProject.worktreePath
+			projectPath := m.selectedProject.path
 			m.selectedProject = nil
 			m.setForm(nil, mainState)
 			if confirmed {
-				if err := os.RemoveAll(repoPath); err != nil {
-					m.err = err
-				}
-				if err := os.RemoveAll(wtPath); err != nil {
+				if err := os.RemoveAll(projectPath); err != nil {
 					m.err = err
 				}
 			}
@@ -390,16 +384,7 @@ func (m *model) View() string {
 }
 
 func bootstrapWorkspace(dir string) error {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "repo"), 0755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "worktree"), 0755); err != nil {
-		return err
-	}
-	return nil
+	return os.MkdirAll(dir, 0755)
 }
 
 type appCmd struct{ workspace string }
