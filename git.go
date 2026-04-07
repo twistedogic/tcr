@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 func createBranch(ctx context.Context, repoPath, owner, repo, branch string) error {
@@ -18,8 +20,10 @@ func pull(ctx context.Context, path string) error {
 	return err
 }
 
-func clone(ctx context.Context, path, owner, repo string) error {
-	repoLink := fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
-	_, err := execute(ctx, path, "git", "clone", repoLink)
-	return err
+func clone(ctx context.Context, path, owner, repo, branch string) error {
+	projectPath := filepath.Join(path, repo)
+	if err := os.MkdirAll(projectPath, 0755); err != nil {
+		return err
+	}
+	return createBranch(ctx, projectPath, owner, repo, branch)
 }

@@ -39,6 +39,7 @@ func cloneForm() *huh.Form {
 		huh.NewGroup(
 			huh.NewInput().Key("owner").Title("owner").Validate(huh.ValidateNotEmpty()),
 			huh.NewInput().Key("repo").Title("repo").Validate(huh.ValidateNotEmpty()),
+			huh.NewInput().Key("branch").Title("branch").Placeholder("main").Validate(huh.ValidateNotEmpty()),
 		).Title("Clone git repository"),
 	)
 }
@@ -163,8 +164,9 @@ func (m *model) handleFormDone() (tea.Model, tea.Cmd) {
 		case newRepoState:
 			repo := m.form.Get("repo").(string)
 			owner := m.form.Get("owner").(string)
+			branch := m.form.Get("branch").(string)
 			m.setForm(nil, mainState)
-			if err := clone(context.Background(), m.workspace, owner, repo); err != nil {
+			if err := clone(context.Background(), m.workspace, owner, repo, branch); err != nil {
 				m.err = err
 			}
 			return m, m.startLoadProjects()
