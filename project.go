@@ -15,32 +15,19 @@ import (
 const maxConcurrency = 4
 
 type Worktree struct {
-	Owner  string
-	Repo   string
-	Name   string
-	Path   string
-	Status *Status
+	Owner string
+	Repo  string
+	Name  string
+	Path  string
 }
 
-func (w *Worktree) refresh(ctx context.Context) error {
-	changes, err := listChanges(ctx, w.Path)
-	if err != nil {
-		return fmt.Errorf("list changes in %s: %w", w.Path, err)
-	}
-	w.Status = &Status{}
-	if len(changes) > 0 {
-		status, err := showChange(ctx, w.Path, changes[0])
-		if err != nil {
-			return fmt.Errorf("show change %s in %s: %w", changes[0], w.Path, err)
-		}
-		w.Status = &status
-	}
+func (w *Worktree) refresh() error {
 	return nil
 }
 
 // implements list.Item
 func (w *Worktree) Title() string       { return fmt.Sprintf("%s/%s – %s", w.Owner, w.Repo, w.Name) }
-func (w *Worktree) Description() string { return w.Status.String() }
+func (w *Worktree) Description() string { return "" }
 func (w *Worktree) FilterValue() string { return w.Name }
 
 func compareWorktree(a, b *Worktree) int { return cmp.Compare(a.Name, b.Name) }
@@ -66,9 +53,6 @@ func (p *Project) AddWorktree(ctx context.Context, name string) error {
 		return err
 	}
 	wt := &Worktree{Name: name, Path: filepath.Join(p.path, name), Owner: p.owner, Repo: p.repo}
-	if err := wt.refresh(ctx); err != nil {
-		return err
-	}
 	if idx, exist := slices.BinarySearchFunc(p.worktrees, wt, compareWorktree); exist {
 		p.worktrees[idx] = wt
 	} else {
@@ -104,9 +88,6 @@ func (p *Project) Refresh(ctx context.Context) error {
 					Path:  filepath.Join(p.path, dirName),
 					Owner: p.owner,
 					Repo:  p.repo,
-				}
-				if err := wt.refresh(ctx); err != nil {
-					return err
 				}
 				p.worktrees[currentIdx] = wt
 				return nil

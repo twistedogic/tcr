@@ -98,13 +98,8 @@ func TestWorktree_Title(t *testing.T) {
 }
 
 func TestWorktree_Description(t *testing.T) {
-	wt := &Worktree{Status: &Status{ChangeName: "my-change", ApplyRequires: []string{"tasks"}}}
-	require.Equal(t, "Pending – tasks", wt.Description())
-}
-
-func TestWorktree_DescriptionNil(t *testing.T) {
-	wt := &Worktree{}
-	require.Equal(t, "No openspec setup", wt.Description())
+	wt := &Worktree{Name: "feature"}
+	require.Equal(t, "", wt.Description())
 }
 
 func TestWorktree_FilterValue(t *testing.T) {
