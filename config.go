@@ -40,7 +40,7 @@ func loadConfig() error {
 		}
 		configHome = filepath.Join(home, ".config")
 	}
-	configPath := filepath.Join(configHome, ".tcr", "config.yaml")
+	configPath := filepath.Join(configHome, "tcr", "config.yaml")
 
 	data, err := os.ReadFile(configPath)
 	if os.IsNotExist(err) {
