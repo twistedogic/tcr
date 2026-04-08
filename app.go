@@ -47,8 +47,8 @@ func cloneForm() *huh.Form {
 func newWorktreeForm(repoName string) *huh.Form {
 	return huh.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Key("name").Title("worktree name").Validate(huh.ValidateNotEmpty()),
-		).Title(fmt.Sprintf("%s – add new worktree", repoName)),
+			huh.NewInput().Key("name").Title("branch").Placeholder("e.g. main, feature/my-thing").Validate(huh.ValidateNotEmpty()),
+		).Title(fmt.Sprintf("%s – create or checkout branch", repoName)),
 	)
 }
 
