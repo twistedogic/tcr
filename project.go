@@ -8,11 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"golang.org/x/sync/errgroup"
 )
-
-const maxConcurrency = 4
 
 type Worktree struct {
 	Owner string
@@ -21,11 +17,8 @@ type Worktree struct {
 	Path  string
 }
 
-func (w *Worktree) refresh() error {
-	return nil
-}
+func (w *Worktree) refresh() error { return nil }
 
-// implements list.Item
 func (w *Worktree) Title() string       { return fmt.Sprintf("%s/%s – %s", w.Owner, w.Repo, w.Name) }
 func (w *Worktree) Description() string { return "" }
 func (w *Worktree) FilterValue() string { return w.Name }
@@ -35,24 +28,44 @@ func compareWorktree(a, b *Worktree) int { return cmp.Compare(a.Name, b.Name) }
 type Project struct {
 	repo  string
 	owner string
+	path  string
 
-	path      string
 	worktrees []*Worktree
 }
 
-// implements list.Item
 func (p *Project) Title() string       { return fmt.Sprintf("%s/%s", p.owner, p.repo) }
 func (p *Project) Description() string { return fmt.Sprintf("%d branches", len(p.worktrees)) }
 func (p *Project) FilterValue() string { return p.Title() }
 
+func (p *Project) Refresh(ctx context.Context) error {
+	branches, err := listBranches(ctx, p.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			p.worktrees = nil
+			return nil
+		}
+		return err
+	}
+
+	wts := make([]*Worktree, 0, len(branches))
+	for _, b := range branches {
+		wts = append(wts, &Worktree{
+			Name:  b,
+			Path:  p.path,
+			Owner: p.owner,
+			Repo:  p.repo,
+		})
+	}
+	slices.SortFunc(wts, compareWorktree)
+	p.worktrees = wts
+	return nil
+}
+
 func (p *Project) AddWorktree(ctx context.Context, name string) error {
-	if err := os.MkdirAll(p.path, 0755); err != nil {
+	if err := checkoutBranch(ctx, p.path, name); err != nil {
 		return err
 	}
-	if err := createBranch(ctx, p.path, p.owner, p.repo, name); err != nil {
-		return err
-	}
-	wt := &Worktree{Name: name, Path: filepath.Join(p.path, name), Owner: p.owner, Repo: p.repo}
+	wt := &Worktree{Name: name, Path: p.path, Owner: p.owner, Repo: p.repo}
 	if idx, exist := slices.BinarySearchFunc(p.worktrees, wt, compareWorktree); exist {
 		p.worktrees[idx] = wt
 	} else {
@@ -62,52 +75,16 @@ func (p *Project) AddWorktree(ctx context.Context, name string) error {
 	return nil
 }
 
-func (p *Project) Refresh(ctx context.Context) error {
-	entries, err := os.ReadDir(p.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			p.worktrees = nil
-			return nil
-		}
-		return err
-	}
-
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrency)
-
-	p.worktrees = make([]*Worktree, len(entries))
-
-	idx := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			currentIdx := idx
-			dirName := entry.Name()
-			g.Go(func() error {
-				wt := &Worktree{
-					Name:  dirName,
-					Path:  filepath.Join(p.path, dirName),
-					Owner: p.owner,
-					Repo:  p.repo,
-				}
-				p.worktrees[currentIdx] = wt
-				return nil
-			})
-			idx++
+func (p *Project) DeleteWorktree(ctx context.Context, name string) error {
+	if _, err := execute(ctx, p.path, "git", "branch", "-d", name); err != nil {
+		if _, err2 := execute(ctx, p.path, "git", "branch", "-D", name); err2 != nil {
+			return fmt.Errorf("delete branch %q: %w", name, err)
 		}
 	}
-
-	if err := g.Wait(); err != nil {
-		return err
+	idx, found := slices.BinarySearchFunc(p.worktrees, &Worktree{Name: name}, compareWorktree)
+	if found {
+		p.worktrees = append(p.worktrees[:idx], p.worktrees[idx+1:]...)
 	}
-
-	result := make([]*Worktree, 0, len(p.worktrees))
-	for _, wt := range p.worktrees {
-		if wt != nil {
-			result = append(result, wt)
-		}
-	}
-	p.worktrees = result
-	slices.SortFunc(p.worktrees, compareWorktree)
 	return nil
 }
 
@@ -130,54 +107,21 @@ func parseOrigin(origin string) (owner, repo string, err error) {
 	return
 }
 
-// LoadProject loads a project from workspace/<repo> by reading the remote
-// origin of any branch checkout found inside it.
+// LoadProject loads a project from a single git clone at path.
 func LoadProject(ctx context.Context, path string) (*Project, error) {
-	entries, err := os.ReadDir(path)
+	b, err := execute(ctx, path, "git", "remote", "get-url", "origin")
+	if err != nil {
+		return nil, fmt.Errorf("could not determine repo origin from %s: %w", path, err)
+	}
+	owner, repo, err := parseOrigin(strings.TrimSpace(string(b)))
 	if err != nil {
 		return nil, err
 	}
-
-	var owner, repo string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		branchPath := filepath.Join(path, entry.Name())
-		b, err := execute(ctx, branchPath, "git", "remote", "get-url", "origin")
-		if err != nil {
-			continue
-		}
-		owner, repo, err = parseOrigin(strings.TrimSpace(string(b)))
-		if err != nil {
-			continue
-		}
-		break
-	}
-
-	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("could not determine repo origin from %s", path)
-	}
-
-	p := &Project{
-		owner: owner,
-		repo:  repo,
-		path:  path,
-	}
+	p := &Project{owner: owner, repo: repo, path: path}
 	return p, p.Refresh(ctx)
 }
 
-func (p *Project) DeleteWorktree(ctx context.Context, name string) error {
-	path := filepath.Join(p.path, name)
-	if err := os.RemoveAll(path); err != nil {
-		return err
-	}
-	idx, found := slices.BinarySearchFunc(p.worktrees, &Worktree{Name: name}, compareWorktree)
-	if found {
-		p.worktrees = append(p.worktrees[:idx], p.worktrees[idx+1:]...)
-	}
-	return nil
-}
+const maxConcurrency = 4
 
 func LoadProjects(ctx context.Context, workspace string) ([]*Project, error) {
 	entries, err := os.ReadDir(workspace)
@@ -185,40 +129,37 @@ func LoadProjects(ctx context.Context, workspace string) ([]*Project, error) {
 		return nil, err
 	}
 
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrency)
+	type result struct {
+		project *Project
+		err     error
+	}
 
-	projects := make([]*Project, len(entries))
+	ch := make(chan result, len(entries))
+	count := 0
+	sem := make(chan struct{}, maxConcurrency)
 
-	idx := 0
 	for _, entry := range entries {
-		if entry.IsDir() {
-			currentIdx := idx
-			dirName := entry.Name()
-			g.Go(func() error {
-				p, err := LoadProject(ctx, filepath.Join(workspace, dirName))
-				if err != nil {
-					return err
-				}
-				projects[currentIdx] = p
-				return nil
-			})
-			idx++
+		if !entry.IsDir() {
+			continue
+		}
+		count++
+		dirName := entry.Name()
+		go func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			p, err := LoadProject(ctx, filepath.Join(workspace, dirName))
+			ch <- result{project: p, err: err}
+		}()
+	}
+
+	projects := make([]*Project, 0, count)
+	for range count {
+		r := <-ch
+		if r.err == nil && r.project != nil {
+			projects = append(projects, r.project)
 		}
 	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	result := make([]*Project, 0, len(projects))
-	for _, p := range projects {
-		if p != nil {
-			result = append(result, p)
-		}
-	}
-
-	return result, nil
+	return projects, nil
 }
 
 // LoadWorkspace is an alias for LoadProjects for backward compatibility.
