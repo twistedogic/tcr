@@ -87,7 +87,7 @@ func TestProject_Description(t *testing.T) {
 		repo:      "myrepo",
 		worktrees: []*Worktree{{}, {}, {}},
 	}
-	require.Equal(t, "3 branches", p.Description())
+	require.Equal(t, "", p.Description())
 }
 
 func TestProject_FilterValue(t *testing.T) {

@@ -26,35 +26,41 @@ func (w *Worktree) FilterValue() string { return w.Name }
 func compareWorktree(a, b *Worktree) int { return cmp.Compare(a.Name, b.Name) }
 
 type Project struct {
-	repo  string
-	owner string
-	path  string
+	repo   string
+	owner  string
+	path   string
+	branch string
 
 	worktrees []*Worktree
 }
 
 func (p *Project) Title() string       { return fmt.Sprintf("%s/%s", p.owner, p.repo) }
-func (p *Project) Description() string { return fmt.Sprintf("%d branches", len(p.worktrees)) }
+func (p *Project) Description() string {
+	if p.branch != "" {
+		return fmt.Sprintf("branch: %s", p.branch)
+	}
+	return ""
+}
 func (p *Project) FilterValue() string { return p.Title() }
 
 func (p *Project) Refresh(ctx context.Context) error {
-	branches, err := listBranches(ctx, p.path)
+	branch, err := currentBranch(ctx, p.path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			p.branch = ""
 			p.worktrees = nil
 			return nil
 		}
 		return err
 	}
-
+	p.branch = branch
+	branches, err := listBranches(ctx, p.path)
+	if err != nil {
+		return err
+	}
 	wts := make([]*Worktree, 0, len(branches))
 	for _, b := range branches {
-		wts = append(wts, &Worktree{
-			Name:  b,
-			Path:  p.path,
-			Owner: p.owner,
-			Repo:  p.repo,
-		})
+		wts = append(wts, &Worktree{Name: b, Path: p.path, Owner: p.owner, Repo: p.repo})
 	}
 	slices.SortFunc(wts, compareWorktree)
 	p.worktrees = wts
@@ -65,14 +71,7 @@ func (p *Project) AddWorktree(ctx context.Context, name string) error {
 	if err := checkoutBranch(ctx, p.path, name); err != nil {
 		return err
 	}
-	wt := &Worktree{Name: name, Path: p.path, Owner: p.owner, Repo: p.repo}
-	if idx, exist := slices.BinarySearchFunc(p.worktrees, wt, compareWorktree); exist {
-		p.worktrees[idx] = wt
-	} else {
-		p.worktrees = append(p.worktrees, wt)
-		slices.SortFunc(p.worktrees, compareWorktree)
-	}
-	return nil
+	return p.Refresh(ctx)
 }
 
 func (p *Project) DeleteWorktree(ctx context.Context, name string) error {

@@ -10,7 +10,9 @@ type ProjectAction int
 
 const (
 	ProjectActionNone ProjectAction = iota
-	ProjectActionExplore
+	ProjectActionReview
+	ProjectActionInteract
+	ProjectActionCheckout
 	ProjectActionClone
 	ProjectActionDelete
 	ProjectActionQuit
@@ -22,14 +24,16 @@ type projectSelectedMsg struct {
 }
 
 type projectKeyMap struct {
-	Explore key.Binding
-	Clone   key.Binding
-	Delete  key.Binding
-	Quit    key.Binding
+	Review   key.Binding
+	Interact key.Binding
+	Checkout key.Binding
+	Clone    key.Binding
+	Delete   key.Binding
+	Quit     key.Binding
 }
 
 func (k projectKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Explore, k.Clone, k.Delete, k.Quit}
+	return []key.Binding{k.Review, k.Interact, k.Checkout, k.Clone, k.Delete, k.Quit}
 }
 
 func (k projectKeyMap) FullHelp() [][]key.Binding {
@@ -38,10 +42,12 @@ func (k projectKeyMap) FullHelp() [][]key.Binding {
 
 func defaultProjectKeyMap() projectKeyMap {
 	return projectKeyMap{
-		Explore: key.NewBinding(key.WithKeys("e", "enter"), key.WithHelp("e/enter", "explore")),
-		Clone:   key.NewBinding(key.WithKeys("c", "n"), key.WithHelp("c/n", "clone")),
-		Delete:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-		Quit:    key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		Review:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "review")),
+		Interact: key.NewBinding(key.WithKeys("i", "enter"), key.WithHelp("i/enter", "interact")),
+		Checkout: key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branch")),
+		Clone:    key.NewBinding(key.WithKeys("c", "n"), key.WithHelp("c/n", "clone")),
+		Delete:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+		Quit:     key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	}
 }
 
@@ -55,7 +61,6 @@ func NewProjectList(projects []*Project, width, height int) *ProjectList {
 	for i, p := range projects {
 		items[i] = p
 	}
-
 	keyMap := defaultProjectKeyMap()
 	l := list.New(items, list.NewDefaultDelegate(), width, height)
 	l.Title = "Projects"
@@ -67,55 +72,45 @@ func NewProjectList(projects []*Project, width, height int) *ProjectList {
 	if len(projects) == 0 {
 		l.SetShowFilter(false)
 	}
-
-	return &ProjectList{
-		list:   l,
-		keyMap: keyMap,
-	}
+	return &ProjectList{list: l, keyMap: keyMap}
 }
 
-func (p *ProjectList) Init() tea.Cmd {
-	return nil
-}
+func (p *ProjectList) Init() tea.Cmd { return nil }
 
 func (p *ProjectList) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, p.keyMap.Explore):
+		case key.Matches(msg, p.keyMap.Review):
 			if selected, ok := p.list.SelectedItem().(*Project); ok {
-				return p, func() tea.Msg {
-					return projectSelectedMsg{action: ProjectActionExplore, project: selected}
-				}
+				return p, func() tea.Msg { return projectSelectedMsg{action: ProjectActionReview, project: selected} }
+			}
+		case key.Matches(msg, p.keyMap.Interact):
+			if selected, ok := p.list.SelectedItem().(*Project); ok {
+				return p, func() tea.Msg { return projectSelectedMsg{action: ProjectActionInteract, project: selected} }
+			}
+		case key.Matches(msg, p.keyMap.Checkout):
+			if selected, ok := p.list.SelectedItem().(*Project); ok {
+				return p, func() tea.Msg { return projectSelectedMsg{action: ProjectActionCheckout, project: selected} }
 			}
 		case key.Matches(msg, p.keyMap.Clone):
-			return p, func() tea.Msg {
-				return projectSelectedMsg{action: ProjectActionClone}
-			}
+			return p, func() tea.Msg { return projectSelectedMsg{action: ProjectActionClone} }
 		case key.Matches(msg, p.keyMap.Delete):
 			if selected, ok := p.list.SelectedItem().(*Project); ok {
-				return p, func() tea.Msg {
-					return projectSelectedMsg{action: ProjectActionDelete, project: selected}
-				}
+				return p, func() tea.Msg { return projectSelectedMsg{action: ProjectActionDelete, project: selected} }
 			}
 		case key.Matches(msg, p.keyMap.Quit):
-			return p, func() tea.Msg {
-				return projectSelectedMsg{action: ProjectActionQuit}
-			}
+			return p, func() tea.Msg { return projectSelectedMsg{action: ProjectActionQuit} }
 		}
-
 	case tea.WindowSizeMsg:
 		p.list.SetSize(msg.Width, msg.Height)
 	}
-
 	var cmd tea.Cmd
 	p.list, cmd = p.list.Update(msg)
 	return p, cmd
 }
 
-func (p *ProjectList) View() string {
-	return p.list.View()
-}
+func (p *ProjectList) View() string { return p.list.View() }
 
 func (p *ProjectList) SetItems(projects []*Project) {
 	items := make([]list.Item, len(projects))

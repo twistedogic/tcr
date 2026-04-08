@@ -65,15 +65,13 @@ func pull(ctx context.Context, path string) error {
 func clone(ctx context.Context, workspace, owner, repo, branch string) error {
 	repoLink := fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
 	projectPath := filepath.Join(workspace, repo)
-	if err := os.MkdirAll(projectPath, 0755); err != nil {
-		return err
-	}
 	tmpPath := projectPath + ".tmp"
 	_ = os.RemoveAll(tmpPath)
 	if _, err := execute(ctx, workspace, "git", "clone", "--branch", branch, repoLink, tmpPath); err != nil {
 		_ = os.RemoveAll(tmpPath)
 		return fmt.Errorf("clone %s/%s: %w", owner, repo, err)
 	}
+	_ = os.RemoveAll(projectPath)
 	if err := os.Rename(tmpPath, projectPath); err != nil {
 		_ = os.RemoveAll(tmpPath)
 		return err

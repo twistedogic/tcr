@@ -44,7 +44,7 @@ func cloneForm() *huh.Form {
 	)
 }
 
-func newWorktreeForm(repoName string) *huh.Form {
+func checkoutForm(repoName string) *huh.Form {
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Key("name").Title("branch").Placeholder("e.g. main, feature/my-thing").Validate(huh.ValidateNotEmpty()),
@@ -69,10 +69,8 @@ type state uint
 const (
 	mainState state = iota
 	newRepoState
-	projectState
-	deleteWorktreeState
+	checkoutState
 	deleteProjectState
-	newWorktreeState
 )
 
 type model struct {
@@ -85,14 +83,8 @@ type model struct {
 	spinner   spinner.Model
 	loading   bool
 
-	// project list (mainState)
 	projectList     *ProjectList
 	selectedProject *Project
-
-	// worktree list (projectState)
-	project          *Project
-	wtList           *WorktreeList
-	selectedWorktree *Worktree
 }
 
 func NewModel(workspace string, sess ssh.Session, renderer *lipgloss.Renderer) tea.Model {
@@ -140,24 +132,12 @@ func (m *model) setForm(form *huh.Form, s state) tea.Cmd {
 	return nil
 }
 
-// handleFormDone processes a form that has reached StateCompleted or
-// StateAborted and transitions the model back to the appropriate parent state.
 func (m *model) handleFormDone() (tea.Model, tea.Cmd) {
 	switch m.form.State {
 	case huh.StateAborted:
-		switch m.state {
-		case newRepoState:
-			m.setForm(nil, mainState)
-			return m, m.startLoadProjects()
-		case newWorktreeState:
-			m.setForm(nil, projectState)
-		case deleteWorktreeState:
-			m.setForm(nil, projectState)
-		case deleteProjectState:
-			m.selectedProject = nil
-			m.setForm(nil, mainState)
-			return m, m.startLoadProjects()
-		}
+		m.selectedProject = nil
+		m.setForm(nil, mainState)
+		return m, m.startLoadProjects()
 	case huh.StateCompleted:
 		switch m.state {
 		case newRepoState:
@@ -169,27 +149,17 @@ func (m *model) handleFormDone() (tea.Model, tea.Cmd) {
 				m.err = err
 			}
 			return m, m.startLoadProjects()
-		case newWorktreeState:
+		case checkoutState:
 			name := m.form.Get("name").(string)
-			m.setForm(nil, projectState)
-			if err := m.project.AddWorktree(context.Background(), name); err != nil {
-				m.err = err
-				return m, nil
-			}
-			m.wtList.SetItems(m.project.worktrees)
-			return m, m.startLoadProjects()
-		case deleteWorktreeState:
-			confirmed := m.form.Get("confirm").(bool)
-			m.setForm(nil, projectState)
-			if confirmed {
-				if err := m.project.DeleteWorktree(context.Background(), m.selectedWorktree.Name); err != nil {
+			p := m.selectedProject
+			m.selectedProject = nil
+			m.setForm(nil, mainState)
+			if p != nil {
+				if err := p.AddWorktree(context.Background(), name); err != nil {
 					m.err = err
-					m.selectedWorktree = nil
-					return m, nil
 				}
-				m.wtList.SetItems(m.project.worktrees)
 			}
-			m.selectedWorktree = nil
+			return m, m.startLoadProjects()
 		case deleteProjectState:
 			confirmed := m.form.Get("confirm").(bool)
 			projectPath := m.selectedProject.path
@@ -207,104 +177,38 @@ func (m *model) handleFormDone() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// If the form already reached a terminal state (e.g. from a previous
-	// update cycle), handle it immediately.
 	if m.form.State == huh.StateAborted || m.form.State == huh.StateCompleted {
 		return m.handleFormDone()
 	}
-
-	// Forward the message to the form.
 	form, cmd := m.form.Update(msg)
 	if f, ok := form.(*huh.Form); ok {
 		m.form = f
 	}
-
-	// Re-check: the update may have transitioned the form to a terminal
-	// state. Handle it now so that View() never renders an empty completed
-	// form (which causes the blank-screen flash).
 	if m.form.State == huh.StateAborted || m.form.State == huh.StateCompleted {
 		mdl, formDone := m.handleFormDone()
 		return mdl, tea.Batch(cmd, formDone)
 	}
-
 	return m, cmd
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Forward spinner tick messages while loading.
 	if _, ok := msg.(spinner.TickMsg); ok && m.loading {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 	}
 
-	// Safety net: if a cmdFinishedMsg with an error arrives while still in a
-	// form state, force-recover to the appropriate parent state. Under normal
-	// operation the per-branch fixes handle this; this catch-all protects
-	// against future regressions.
 	if msg, ok := msg.(cmdFinishedMsg); ok && msg.err != nil {
-		switch m.state {
-		case newRepoState, deleteProjectState:
-			m.err = msg.err
-			m.form = nil
-			m.selectedProject = nil
-			m.state = mainState
-			return m, m.startLoadProjects()
-		case newWorktreeState, deleteWorktreeState:
-			m.err = msg.err
-			m.form = nil
-			m.selectedWorktree = nil
-			m.state = projectState
-			return m, nil
-		}
+		m.err = msg.err
+		m.form = nil
+		m.selectedProject = nil
+		m.state = mainState
+		return m, m.startLoadProjects()
 	}
 
 	switch m.state {
-	case newRepoState, newWorktreeState, deleteWorktreeState, deleteProjectState:
+	case newRepoState, checkoutState, deleteProjectState:
 		return m.formUpdate(msg)
-	case projectState:
-		switch msg := msg.(type) {
-		case worktreeSelectedMsg:
-			switch msg.action {
-			case ActionReview:
-				m.selectedWorktree = msg.worktree
-				return m, interactive(m.sess, m.selectedWorktree.Path, "tuicr", "--stdout")
-			case ActionInteract:
-				m.selectedWorktree = msg.worktree
-				return m, interactive(m.sess, m.selectedWorktree.Path, cfg.Interactive.Agent, cfg.Interactive.Args...)
-			case ActionCreate:
-				return m, m.setForm(newWorktreeForm(m.project.Title()), newWorktreeState)
-			case ActionDelete:
-				m.selectedWorktree = msg.worktree
-				return m, m.setForm(deleteConfirmForm("worktree", msg.worktree.Name), deleteWorktreeState)
-			case ActionBack:
-				m.project = nil
-				m.wtList = nil
-				m.state = mainState
-				return m, m.startLoadProjects()
-			}
-		case cmdFinishedMsg:
-			if msg.err != nil {
-				m.err = msg.err
-			}
-			// Refresh worktree list after command completes
-			if m.project != nil {
-				if err := m.project.Refresh(context.Background()); err != nil {
-					m.err = err
-				} else {
-					m.wtList.SetItems(m.project.worktrees)
-				}
-			}
-			return m, nil
-		}
-
-		var cmd tea.Cmd
-		mdl, cmd := m.wtList.Update(msg)
-		if wtl, ok := mdl.(*WorktreeList); ok {
-			m.wtList = wtl
-		}
-		return m, cmd
-
 	default: // mainState
 		switch msg := msg.(type) {
 		case projectsLoadedMsg:
@@ -321,14 +225,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case projectSelectedMsg:
 			switch msg.action {
-			case ProjectActionExplore:
-				m.project = msg.project
-				m.wtList = NewWorktreeList(m.project.worktrees, 80, 20)
-				m.state = projectState
-				if len(m.project.worktrees) == 0 {
-					return m, m.setForm(newWorktreeForm(m.project.Title()), newWorktreeState)
-				}
-				return m, nil
+			case ProjectActionReview:
+				return m, interactive(m.sess, msg.project.path, "tuicr", "--stdout")
+			case ProjectActionInteract:
+				return m, interactive(m.sess, msg.project.path, cfg.Interactive.Agent, cfg.Interactive.Args...)
+			case ProjectActionCheckout:
+				m.selectedProject = msg.project
+				return m, m.setForm(checkoutForm(msg.project.Title()), checkoutState)
 			case ProjectActionClone:
 				return m, m.setForm(cloneForm(), newRepoState)
 			case ProjectActionDelete:
@@ -342,19 +245,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Delegate to project list if available
 		if m.projectList != nil {
 			var cmd tea.Cmd
 			mdl, cmd := m.projectList.Update(msg)
 			if pl, ok := mdl.(*ProjectList); ok {
 				m.projectList = pl
-			}
-			return m, cmd
-		}
-		if m.wtList != nil {
-			mdl, cmd := m.wtList.Update(msg)
-			if wl, ok := mdl.(*WorktreeList); ok {
-				m.wtList = wl
 			}
 			return m, cmd
 		}
@@ -364,10 +259,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) View() string {
 	switch m.state {
-	case newRepoState, newWorktreeState, deleteWorktreeState, deleteProjectState:
+	case newRepoState, checkoutState, deleteProjectState:
 		return m.form.View()
-	case projectState:
-		return m.wtList.View()
 	}
 	if m.err != nil && m.projectList != nil {
 		return m.errStyle.Render(m.err.Error()+"\n\n") + m.projectList.View()
@@ -403,11 +296,8 @@ func (a *appCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...any) subcomman
 		return subcommands.ExitFailure
 	}
 	m := NewModel(a.workspace, nil, lipgloss.DefaultRenderer())
-
-	// Run the TUI
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		return subcommands.ExitFailure
 	}
-
 	return subcommands.ExitSuccess
 }

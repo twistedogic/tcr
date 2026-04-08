@@ -61,10 +61,10 @@ func loadConfig() error {
 		return fmt.Errorf("could not read config file %s: %w", configPath, err)
 	}
 
-	merged := defaultConfig
-	if err := yaml.Unmarshal(data, &merged); err != nil {
+	var userConfig AgentConfig
+	if err := yaml.Unmarshal(data, &userConfig); err != nil {
 		return fmt.Errorf("could not parse config file %s: %w", configPath, err)
 	}
-	cfg = merged
+	cfg = userConfig
 	return nil
 }
